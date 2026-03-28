@@ -2,6 +2,8 @@
 
 자율 암호화폐 트레이딩 AI 시스템. LangGraph 기반 멀티 에이전트 파이프라인이 15분마다 실행되며, XGBoost 모델로 BUY/SELL/HOLD를 예측하고 포트폴리오 리스크를 관리하면서 Paper Trading을 수행한다. Railway에서 24/7 운영 중.
 
+🌐 **라이브 대시보드**: https://alpha-agents-production.up.railway.app
+
 ---
 
 ## 목차
