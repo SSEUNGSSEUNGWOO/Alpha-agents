@@ -102,8 +102,12 @@ async def startup():
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    data = await get_dashboard_data()
-    return render_html(data)
+    try:
+        data = await get_dashboard_data()
+        return render_html(data)
+    except Exception as e:
+        import traceback
+        return HTMLResponse(f"<pre>Error:\n{traceback.format_exc()}</pre>", status_code=500)
 
 
 @app.get("/api/status")
