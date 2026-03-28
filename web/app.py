@@ -19,6 +19,28 @@ app = FastAPI()
 INITIAL_CAPITAL = 1000.0  # 심볼당 초기 자본
 
 
+async def get_fear_greed() -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value, date FROM onchain WHERE symbol='BTC' AND metric='fear_greed' ORDER BY date DESC LIMIT 1"
+        )
+    if not row:
+        return {"value": 50, "label": "Neutral", "color": "#888"}
+    val = int(row["value"])
+    if val <= 25:
+        label, color = "Extreme Fear", "#ff4d4d"
+    elif val <= 45:
+        label, color = "Fear", "#ff9944"
+    elif val <= 55:
+        label, color = "Neutral", "#888"
+    elif val <= 75:
+        label, color = "Greed", "#88cc44"
+    else:
+        label, color = "Extreme Greed", "#00c896"
+    return {"value": val, "label": label, "color": color}
+
+
 async def get_prices() -> dict:
     """현재가 조회"""
     prices = {}
@@ -41,6 +63,7 @@ async def get_prices() -> dict:
 async def get_dashboard_data() -> dict:
     pool = await get_pool()
     prices = await get_prices()
+    fg = await get_fear_greed()
 
     async with pool.acquire() as conn:
         from config import settings
@@ -118,6 +141,7 @@ async def get_dashboard_data() -> dict:
             "total_unreal":   round(total_unrealized, 2),
             "total_balance":  round(total_balance, 2),
             "initial_capital": round(INITIAL_CAPITAL * len(all_symbols), 2),
+            "fear_greed":     fg,
         }
 
 
@@ -162,6 +186,7 @@ def render_html(data: dict) -> str:
     total_color  = "profit" if data["total_pnl"] >= 0 else "loss"
     return_pct   = ((data["total_balance"] - data["initial_capital"]) / data["initial_capital"] * 100) if data["initial_capital"] else 0
     return_color = "profit" if return_pct >= 0 else "loss"
+    fg           = data.get("fear_greed", {"value": 50, "label": "Neutral", "color": "#888"})
 
     # 심볼 가격 헤더
     price_tags = ""
@@ -287,6 +312,10 @@ def render_html(data: dict) -> str:
   .buy {{ color: #00c896; font-weight: bold; }}
   .sell {{ color: #ff4d4d; font-weight: bold; }}
   .status {{ text-align: center; color: #444; font-size: 11px; margin-top: 16px; }}
+  .fg-bar {{ background: #1a1a1a; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }}
+  .fg-label {{ color: #888; font-size: 12px; white-space: nowrap; }}
+  .fg-track {{ flex: 1; background: #2a2a2a; border-radius: 4px; height: 6px; overflow: hidden; }}
+  .fg-fill {{ height: 100%; border-radius: 4px; transition: width 0.3s; }}
 </style>
 </head>
 <body>
@@ -294,6 +323,14 @@ def render_html(data: dict) -> str:
 <div class="subtitle">Paper Trading · 60초 자동갱신</div>
 
 <div class="prices">{price_tags}</div>
+
+<div class="fg-bar">
+  <span class="fg-label">Fear & Greed</span>
+  <div class="fg-track">
+    <div class="fg-fill" style="width:{fg['value']}%; background:{fg['color']}"></div>
+  </div>
+  <span style="color:{fg['color']}; font-weight:bold">{fg['value']} {fg['label']}</span>
+</div>
 
 <div class="summary">
   <div class="summary-top">
