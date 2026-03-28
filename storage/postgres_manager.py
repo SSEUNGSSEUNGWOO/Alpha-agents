@@ -1,3 +1,4 @@
+import os
 import asyncpg
 from config import settings
 
@@ -5,11 +6,20 @@ from config import settings
 _pool: asyncpg.Pool | None = None
 
 
+def _get_dsn() -> str:
+    # Railway는 DATABASE_URL을 직접 os.environ에 주입
+    url = os.environ.get("DATABASE_URL") or settings.postgres_dsn
+    # asyncpg는 postgres:// 또는 postgresql:// 모두 지원
+    return url
+
+
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
+        dsn = _get_dsn()
+        print(f"[DB] connecting to: {dsn[:30]}...", flush=True)
         _pool = await asyncpg.create_pool(
-            dsn=settings.postgres_dsn,
+            dsn=dsn,
             min_size=2,
             max_size=10,
         )
