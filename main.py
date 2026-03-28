@@ -12,6 +12,8 @@ from storage import init_db
 from graph.graph import get_graph
 from agents.data_agent.collectors.ohlcv import run_collector as run_ohlcv_collector
 from agents.data_agent.collectors.fear_greed import run_fear_greed_collector
+from agents.data_agent.collectors.trends import run_trends_collector
+from agents.data_agent.collectors.cryptopanic import run_cryptopanic_collector
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +74,8 @@ async def main():
     # 수집기 백그라운드 실행
     asyncio.create_task(run_ohlcv_collector())
     asyncio.create_task(run_fear_greed_collector())
+    asyncio.create_task(run_trends_collector())
+    asyncio.create_task(run_cryptopanic_collector())
 
     # 첫 사이클 즉시 실행 후 15분마다 반복
     while True:

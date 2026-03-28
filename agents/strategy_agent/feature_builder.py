@@ -17,6 +17,8 @@ FEATURE_COLS = [
     "btc_return_15m", "btc_return_1h", "btc_eth_ratio", "btc_eth_corr_24h",
     # 시장 심리
     "fear_greed",
+    "trends_score",    # Google Trends 검색량 (0-100)
+    "trends_change",   # 전주 대비 변화 (-100~100)
 ]
 
 BTC_FEATURE_COLS = [c for c in FEATURE_COLS if not c.startswith("btc_")]
@@ -174,6 +176,27 @@ async def build_training_data(symbol: str) -> tuple[pd.DataFrame, pd.Series]:
         )
     else:
         df["fear_greed"] = 50.0  # 데이터 없으면 중립값
+
+    # Google Trends 붙이기
+    async with pool.acquire() as conn:
+        tr_rows = await conn.fetch(
+            "SELECT date, value FROM onchain WHERE symbol=$1 AND metric='google_trends' ORDER BY date ASC",
+            symbol,
+        )
+    if tr_rows:
+        tr_df = pd.DataFrame(tr_rows, columns=["date", "value"])
+        tr_df["open_time"]     = pd.to_datetime(tr_df["date"]).astype("datetime64[us]")
+        tr_df["trends_score"]  = tr_df["value"].astype(float)
+        tr_df["trends_change"] = tr_df["trends_score"].diff().fillna(0)
+        tr_df = tr_df.drop(columns=["date", "value"])
+        df = pd.merge_asof(
+            df.sort_values("open_time"),
+            tr_df.sort_values("open_time"),
+            on="open_time", direction="backward",
+        )
+    else:
+        df["trends_score"]  = 50.0
+        df["trends_change"] = 0.0
 
     df = df.merge(labeled[["open_time", "label"]], on="open_time", how="inner")
     df = df.dropna(subset=feat_cols)
