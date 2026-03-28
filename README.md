@@ -268,6 +268,8 @@ CryptoPanic은 현재 데이터를 **쌓기만** 하고 있다. 과거 데이터
 
 ## 9. 웹 대시보드
 
+![Alpha Agents Dashboard](docs/dashboard.png)
+
 Railway에 배포된 FastAPI 서버에서 제공한다. 모바일에서도 확인 가능하도록 max-width 480px 기준으로 설계했다.
 
 - **포트폴리오 요약**: 총 잔고, 초기 대비 수익률, 가용 현금, 실현/미실현 손익
