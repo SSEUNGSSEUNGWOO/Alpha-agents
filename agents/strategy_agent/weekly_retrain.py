@@ -13,10 +13,9 @@ from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import xgboost as xgb
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, accuracy_score
 from sklearn.utils.class_weight import compute_sample_weight
-from agents.strategy_agent.trainer import time_decay_weights
+from agents.strategy_agent.trainer import time_decay_weights, time_split
 
 log = logging.getLogger("weekly-retrain")
 
@@ -64,9 +63,8 @@ async def retrain_symbol(symbol: str) -> dict:
         log.warning(f"[{symbol}] 데이터 부족 ({len(X)}개) — 재학습 스킵")
         return {"symbol": symbol, "status": "skipped", "reason": "insufficient data"}
 
-    X_train, X_val, y_train, y_val, t_train, _ = train_test_split(
-        X, y, open_times, test_size=0.15, shuffle=False
-    )
+    X_train, X_val, X_test, y_train, y_val, y_test, t_train, t_val, t_test = \
+        time_split(X, y, open_times)
 
     model = xgb.XGBClassifier(
         n_estimators=500,
@@ -87,9 +85,10 @@ async def retrain_symbol(symbol: str) -> dict:
     model.fit(X_train, y_train, sample_weight=combined,
               eval_set=[(X_val, y_val)], verbose=False)
 
-    y_pred   = model.predict(X_val)
-    accuracy = float(accuracy_score(y_val, y_pred))
-    f1       = float(f1_score(y_val, y_pred, average="macro"))
+    # Test 셋으로 최종 평가 (unseen)
+    y_pred   = model.predict(X_test)
+    accuracy = float(accuracy_score(y_test, y_pred))
+    f1       = float(f1_score(y_test, y_pred, average="macro"))
 
     # 기존 모델과 비교
     prev_f1 = await _get_current_f1(symbol)
