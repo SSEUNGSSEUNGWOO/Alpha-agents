@@ -66,14 +66,15 @@ async def backfill(client: AsyncClient, symbol: str, interval: str, days: int) -
     log.info("backfill.done", symbol=symbol, interval=interval, total=total)
 
 
-async def main(days: int) -> None:
+async def main(days: int, extra_symbols: list = None) -> None:
     await init_tables()
     client = await AsyncClient.create(
         api_key=settings.binance_api_key,
         api_secret=settings.binance_api_secret,
     )
+    symbols = extra_symbols if extra_symbols else settings.symbols
     try:
-        for symbol in settings.symbols:
+        for symbol in symbols:
             for interval in INTERVALS:
                 log.info("backfill.start", symbol=symbol, interval=interval, days=days)
                 await backfill(client, symbol, interval, days)
@@ -84,5 +85,7 @@ async def main(days: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=90)
+    parser.add_argument("--symbols", type=str, default="")
     args = parser.parse_args()
-    asyncio.run(main(args.days))
+    extra = [s.strip() for s in args.symbols.split(",") if s.strip()] if args.symbols else []
+    asyncio.run(main(args.days, extra))
