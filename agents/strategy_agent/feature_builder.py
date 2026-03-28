@@ -13,8 +13,10 @@ FEATURE_COLS = [
     # 15m — 변동성/모멘텀 위주로 정리
     "bb_width_15m", "atr_15m", "volatility_15m", "adx_15m",
     "volume_ratio_15m", "stoch_k_15m",
-    # BTC 시장 피처 (ETH에 특히 유효, BTC도 자기 자신과 비교)
+    # BTC 시장 피처
     "btc_return_15m", "btc_return_1h", "btc_eth_ratio", "btc_eth_corr_24h",
+    # 시장 심리
+    "fear_greed",
 ]
 
 BTC_FEATURE_COLS = [c for c in FEATURE_COLS if not c.startswith("btc_")]
@@ -153,6 +155,25 @@ async def build_training_data(symbol: str) -> tuple[pd.DataFrame, pd.Series]:
     feat_cols = FEATURE_COLS if symbol != "BTCUSDT" else BTC_FEATURE_COLS
     if symbol != "BTCUSDT" and btc_15m is not None:
         df = add_btc_features(df, btc_15m, btc_1h)
+
+    # Fear & Greed 붙이기
+    async with pool.acquire() as conn:
+        fg_rows = await conn.fetch(
+            "SELECT date, value FROM onchain WHERE symbol='BTC' AND metric='fear_greed' ORDER BY date ASC"
+        )
+    if fg_rows:
+        fg_df = pd.DataFrame(fg_rows, columns=["date", "value"])
+        fg_df["open_time"] = pd.to_datetime(fg_df["date"]).astype("datetime64[us]")
+        fg_df = fg_df.rename(columns={"value": "fear_greed"}).drop(columns=["date"])
+        fg_df["fear_greed"] = fg_df["fear_greed"].astype(float)
+        df["open_time"] = df["open_time"].astype("datetime64[us]")
+        df = pd.merge_asof(
+            df.sort_values("open_time"),
+            fg_df.sort_values("open_time"),
+            on="open_time", direction="backward",
+        )
+    else:
+        df["fear_greed"] = 50.0  # 데이터 없으면 중립값
 
     df = df.merge(labeled[["open_time", "label"]], on="open_time", how="inner")
     df = df.dropna(subset=feat_cols)

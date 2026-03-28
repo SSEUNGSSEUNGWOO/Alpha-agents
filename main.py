@@ -11,6 +11,7 @@ from config import settings
 from storage import init_db
 from graph.graph import get_graph
 from agents.data_agent.collectors.ohlcv import run_collector as run_ohlcv_collector
+from agents.data_agent.collectors.fear_greed import run_fear_greed_collector
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,8 +69,9 @@ async def main():
     log.info("Alpha Agents 시작")
     await init_db()
 
-    # OHLCV 수집기를 백그라운드 태스크로 실행
-    collector_task = asyncio.create_task(run_ohlcv_collector())
+    # 수집기 백그라운드 실행
+    asyncio.create_task(run_ohlcv_collector())
+    asyncio.create_task(run_fear_greed_collector())
 
     # 첫 사이클 즉시 실행 후 15분마다 반복
     while True:

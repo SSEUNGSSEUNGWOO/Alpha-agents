@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import talib
-from storage import get_pool
+from storage import get_pool  # noqa: F401 (used in get_fear_greed)
 
 
 async def fetch_ohlcv(symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
@@ -51,6 +51,18 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+async def get_fear_greed() -> float:
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM onchain WHERE symbol='BTC' AND metric='fear_greed' ORDER BY date DESC LIMIT 1"
+            )
+        return float(row["value"]) if row else 50.0
+    except Exception:
+        return 50.0
+
+
 async def get_technical_signals(symbol: str) -> dict:
     df_15m = await fetch_ohlcv(symbol, "15m", limit=300)
     df_1h  = await fetch_ohlcv(symbol, "1h",  limit=300)
@@ -82,6 +94,7 @@ async def get_technical_signals(symbol: str) -> dict:
         "adx_1h":         last(df_1h, "adx_14"),
         "bb_position_1h": last(df_1h, "bb_position"),
         "ema_trend_1h":   1.0 if last(df_1h, "ema_20") > last(df_1h, "ema_50") else -1.0,
+        "fear_greed":     await get_fear_greed(),
         # 4h 지표
         "rsi_4h":         last(df_4h, "rsi_14"),
         "macd_hist_4h":   last(df_4h, "macd_hist"),
