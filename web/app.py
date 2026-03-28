@@ -200,24 +200,16 @@ def render_html(data: dict) -> str:
     return_color = "profit" if return_pct >= 0 else "loss"
     fg           = data.get("fear_greed", {"value": 50, "label": "Neutral", "color": "#888"})
 
-    # 심볼 가격 헤더
-    price_tags = ""
+    # 심볼 행 (아코디언)
+    symbol_rows = ""
     for s in data["symbols"]:
-        chg_color = "#00c896" if s["change"] >= 0 else "#ff4d4d"
-        chg_sign  = "+" if s["change"] >= 0 else ""
-        price_tags += f"""
-        <div class="price-tag">
-            <span class="price-sym">{s['symbol'].replace('USDT','')}</span>
-            <span class="price-val">${s['current']:,.0f}</span>
-            <span style="color:{chg_color}; font-size:11px">{chg_sign}{s['change']:.2f}%</span>
-        </div>
-        """ if s["current"] else ""
-
-    # 심볼 카드 + 차트
-    cards = ""
-    for s in data["symbols"]:
-        pnl_color   = "profit" if s["realized"] >= 0 else "loss"
-        unreal_color= "profit" if s["unrealized"] >= 0 else "loss"
+        chg_color    = "#00c896" if s["change"] >= 0 else "#ff4d4d"
+        chg_sign     = "+" if s["change"] >= 0 else ""
+        pnl_color    = "profit" if s["realized"] >= 0 else "loss"
+        unreal_color = "profit" if s["unrealized"] >= 0 else "loss"
+        open_dot     = '<span style="color:#00c896;font-size:8px">●</span> ' if s["open"] else ""
+        sym_short    = s['symbol'].replace('USDT', '')
+        price_str    = f"${s['current']:,.2f}" if s["current"] else "—"
 
         pos_html = ""
         if s["open"] and s["qty"] and s["entry_price"]:
@@ -227,15 +219,14 @@ def render_html(data: dict) -> str:
             <div class="row"><span class="label">투자금액</span>
                 <span style="color:#aaa">${s['invested']:,.2f}</span></div>
             <div class="row"><span class="label">미실현</span>
-                <span class="{unreal_color}">${s['unrealized']:+.2f}</span></div>
-            """
+                <span class="{unreal_color}">${s['unrealized']:+.2f}</span></div>"""
         else:
             pos_html = '<div class="row"><span class="label">포지션</span><span style="color:#888">없음</span></div>'
 
         recent_rows = ""
         for t in s["recent"]:
             side_cls = "buy" if t["side"] == "BUY" else "sell"
-            pnl_str  = f'<span class="{"profit" if t["pnl"] and t["pnl"]>0 else "loss"}">${t["pnl"]:+.2f}</span>' if t["pnl"] is not None else "-"
+            pnl_str  = f'<span class="{"profit" if t["pnl"] and t["pnl"]>0 else "loss"}">${t["pnl"]:+.2f}</span>' if t["pnl"] is not None else "—"
             recent_rows += f"""<tr>
                 <td class="{side_cls}">{t['side']}</td>
                 <td>${t['price']:,.0f}</td>
@@ -243,49 +234,56 @@ def render_html(data: dict) -> str:
                 <td>{pnl_str}</td>
                 <td style="color:#666">{t['time']}</td>
             </tr>"""
-
         table_html = f"""<table class="trade-table">
             <tr><th>방향</th><th>가격</th><th>수량</th><th>PnL</th><th>시간</th></tr>
             {recent_rows}
-        </table>""" if recent_rows else ""
+        </table>""" if recent_rows else '<div style="color:#555;font-size:12px;padding:8px 0">거래 없음</div>'
 
-        cards += f"""
-        <div class="card">
-            <div class="card-header">
-                <span class="symbol">{s['symbol']}</span>
-                <span class="{pnl_color}" style="font-size:13px">손익 ${s['realized']:+.2f}</span>
+        symbol_rows += f"""
+        <div class="sym-card" id="card-{s['symbol']}">
+          <div class="sym-row" onclick="toggle('{s['symbol']}')">
+            <div class="sym-left">
+              {open_dot}<span class="sym-name">{sym_short}</span>
+              <span class="sym-price">{price_str}</span>
+              <span style="color:{chg_color};font-size:11px">{chg_sign}{s['change']:.2f}%</span>
             </div>
-            <div id="chart-{s['symbol']}" style="height:180px; margin: 8px 0;"></div>
-            <div class="row"><span class="label">실현손익</span>
-                <span class="{pnl_color}">${s['realized']:+.2f}</span></div>
+            <div class="sym-right">
+              <span class="{pnl_color}" style="font-size:13px">${s['realized']:+.2f}</span>
+              <span class="chevron" id="chev-{s['symbol']}">›</span>
+            </div>
+          </div>
+          <div class="sym-detail" id="detail-{s['symbol']}">
+            <div id="chart-{s['symbol']}" style="height:200px; margin: 10px 0 6px;"></div>
             {pos_html}
             <div class="row"><span class="label">거래</span>
                 <span>BUY {s['buys']} / SELL {s['sells']} · 승률 {s['win_rate']}%</span></div>
             {table_html}
+          </div>
         </div>
         <script>
-        (async () => {{
-            const res = await fetch('/api/ohlcv/{s["symbol"]}?limit=100');
-            const data = await res.json();
-            const chart = LightweightCharts.createChart(document.getElementById('chart-{s["symbol"]}'), {{
-                layout: {{ background: {{ color: '#1a1a1a' }}, textColor: '#888' }},
-                grid: {{ vertLines: {{ color: '#2a2a2a' }}, horzLines: {{ color: '#2a2a2a' }} }},
-                timeScale: {{ timeVisible: true, borderColor: '#2a2a2a' }},
-                rightPriceScale: {{ borderColor: '#2a2a2a' }},
-                width: document.getElementById('chart-{s["symbol"]}').clientWidth,
-                height: 180,
+        window._chartLoaded = window._chartLoaded || {{}};
+        function loadChart_{s['symbol']}() {{
+            if (window._chartLoaded['{s['symbol']}']) return;
+            window._chartLoaded['{s['symbol']}'] = true;
+            fetch('/api/ohlcv/{s['symbol']}?limit=100').then(r=>r.json()).then(data=>{{
+                const el = document.getElementById('chart-{s['symbol']}');
+                const chart = LightweightCharts.createChart(el, {{
+                    layout: {{ background: {{ color: '#161616' }}, textColor: '#888' }},
+                    grid: {{ vertLines: {{ color: '#222' }}, horzLines: {{ color: '#222' }} }},
+                    timeScale: {{ timeVisible: true, borderColor: '#2a2a2a' }},
+                    rightPriceScale: {{ borderColor: '#2a2a2a' }},
+                    width: el.clientWidth, height: 200,
+                }});
+                const series = chart.addCandlestickSeries({{
+                    upColor:'#00c896', downColor:'#ff4d4d',
+                    borderUpColor:'#00c896', borderDownColor:'#ff4d4d',
+                    wickUpColor:'#00c896', wickDownColor:'#ff4d4d',
+                }});
+                series.setData(data);
+                chart.timeScale().fitContent();
+                window.addEventListener('resize', ()=>chart.applyOptions({{width:el.clientWidth}}));
             }});
-            const series = chart.addCandlestickSeries({{
-                upColor: '#00c896', downColor: '#ff4d4d',
-                borderUpColor: '#00c896', borderDownColor: '#ff4d4d',
-                wickUpColor: '#00c896', wickDownColor: '#ff4d4d',
-            }});
-            series.setData(data);
-            chart.timeScale().fitContent();
-            window.addEventListener('resize', () => {{
-                chart.applyOptions({{ width: document.getElementById('chart-{s["symbol"]}').clientWidth }});
-            }});
-        }})();
+        }}
         </script>
         """
 
@@ -304,38 +302,42 @@ def render_html(data: dict) -> str:
   body {{ background: #0f0f0f; color: #e0e0e0; font-family: -apple-system, sans-serif; padding: 16px; max-width: 480px; margin: 0 auto; }}
   h1 {{ font-size: 18px; color: #fff; }}
   .subtitle {{ color: #555; font-size: 11px; margin-bottom: 12px; }}
-  .prices {{ display: flex; gap: 12px; margin-bottom: 12px; }}
-  .price-tag {{ background: #1a1a1a; border-radius: 10px; padding: 10px 14px; flex: 1; }}
-  .price-sym {{ color: #888; font-size: 11px; display: block; }}
-  .price-val {{ color: #fff; font-size: 16px; font-weight: bold; display: block; }}
   .summary {{ background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 12px; }}
   .summary-top {{ display: flex; justify-content: space-between; align-items: flex-start; }}
   .big {{ font-size: 28px; font-weight: bold; }}
   .meta {{ font-size: 12px; color: #666; margin-top: 4px; }}
   .profit {{ color: #00c896; }}
   .loss {{ color: #ff4d4d; }}
-  .card {{ background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 12px; }}
-  .card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
-  .symbol {{ font-size: 15px; font-weight: bold; color: #fff; }}
   .row {{ display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #222; font-size: 13px; }}
   .label {{ color: #666; }}
+  .fg-bar {{ background: #1a1a1a; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }}
+  .fg-label {{ color: #888; font-size: 12px; white-space: nowrap; }}
+  .fg-track {{ flex: 1; background: #2a2a2a; border-radius: 4px; height: 6px; overflow: hidden; }}
+  .fg-fill {{ height: 100%; border-radius: 4px; transition: width 0.3s; }}
+  /* 아코디언 */
+  .sym-card {{ background: #1a1a1a; border-radius: 12px; margin-bottom: 8px; overflow: hidden; }}
+  .sym-row {{ display: flex; justify-content: space-between; align-items: center;
+              padding: 14px 16px; cursor: pointer; user-select: none; }}
+  .sym-row:active {{ background: #222; }}
+  .sym-left {{ display: flex; align-items: center; gap: 8px; }}
+  .sym-name {{ font-size: 15px; font-weight: bold; color: #fff; }}
+  .sym-price {{ font-size: 14px; color: #ccc; }}
+  .sym-right {{ display: flex; align-items: center; gap: 10px; }}
+  .chevron {{ color: #555; font-size: 20px; transition: transform 0.25s; line-height:1; }}
+  .chevron.open {{ transform: rotate(90deg); }}
+  .sym-detail {{ display: none; padding: 0 16px 14px; border-top: 1px solid #222; }}
+  .sym-detail.open {{ display: block; }}
   .trade-table {{ width: 100%; margin-top: 10px; font-size: 11px; border-collapse: collapse; }}
   .trade-table th {{ color: #555; text-align: left; padding: 3px; }}
   .trade-table td {{ padding: 3px; border-top: 1px solid #222; }}
   .buy {{ color: #00c896; font-weight: bold; }}
   .sell {{ color: #ff4d4d; font-weight: bold; }}
   .status {{ text-align: center; color: #444; font-size: 11px; margin-top: 16px; }}
-  .fg-bar {{ background: #1a1a1a; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }}
-  .fg-label {{ color: #888; font-size: 12px; white-space: nowrap; }}
-  .fg-track {{ flex: 1; background: #2a2a2a; border-radius: 4px; height: 6px; overflow: hidden; }}
-  .fg-fill {{ height: 100%; border-radius: 4px; transition: width 0.3s; }}
 </style>
 </head>
 <body>
 <h1>Alpha Agents</h1>
 <div class="subtitle">Paper Trading · 60초 자동갱신</div>
-
-<div class="prices">{price_tags}</div>
 
 <div class="fg-bar">
   <span class="fg-label">Fear & Greed</span>
@@ -364,9 +366,24 @@ def render_html(data: dict) -> str:
   </div>
 </div>
 
-{cards}
+{symbol_rows}
 
 <div class="status">{status_msg}</div>
+
+<script>
+function toggle(sym) {{
+  const detail = document.getElementById('detail-' + sym);
+  const chev   = document.getElementById('chev-' + sym);
+  const isOpen = detail.classList.contains('open');
+  detail.classList.toggle('open', !isOpen);
+  chev.classList.toggle('open', !isOpen);
+  if (!isOpen) {{
+    // 펼칠 때 차트 lazy load
+    const fn = window['loadChart_' + sym];
+    if (fn) fn();
+  }}
+}}
+</script>
 </body>
 </html>"""
 
