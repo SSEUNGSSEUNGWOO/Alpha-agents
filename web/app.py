@@ -6,8 +6,9 @@ import sys
 sys.path.insert(0, ".")
 
 import asyncio
+import os
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
 from storage import init_db, get_pool
@@ -15,23 +16,42 @@ from agents.analysis_agent.technical import fetch_ohlcv
 
 app = FastAPI()
 
+INITIAL_CAPITAL = 1000.0  # 심볼당 초기 자본
+
+
+async def get_prices() -> dict:
+    """현재가 조회"""
+    prices = {}
+    from config import settings
+    for sym in settings.symbols:
+        try:
+            df = await fetch_ohlcv(sym, "15m", limit=2)
+            if len(df) >= 2:
+                prices[sym] = {
+                    "price": float(df["close"].iloc[-1]),
+                    "change": float((df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2] * 100),
+                }
+            elif len(df) == 1:
+                prices[sym] = {"price": float(df["close"].iloc[-1]), "change": 0.0}
+        except Exception:
+            prices[sym] = {"price": 0.0, "change": 0.0}
+    return prices
+
 
 async def get_dashboard_data() -> dict:
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        symbols = await conn.fetch(
-            "SELECT DISTINCT symbol FROM trades WHERE mode='paper'"
-        )
+    prices = await get_prices()
 
-        if not symbols:
-            return {"symbols": [], "total_pnl": 0.0, "total_real": 0.0, "total_unreal": 0.0}
+    async with pool.acquire() as conn:
+        from config import settings
+        all_symbols = settings.symbols
 
         result = []
         total_realized = 0.0
         total_unrealized = 0.0
+        total_balance = 0.0
 
-        for row in symbols:
-            sym = row["symbol"]
+        for sym in all_symbols:
             trades = await conn.fetch(
                 """
                 SELECT side, price, quantity, pnl, executed_at
@@ -40,26 +60,28 @@ async def get_dashboard_data() -> dict:
                 """, sym
             )
 
-            buys   = [t for t in trades if t["side"] == "BUY"]
-            sells  = [t for t in trades if t["side"] == "SELL"]
+            buys     = [t for t in trades if t["side"] == "BUY"]
+            sells    = [t for t in trades if t["side"] == "SELL"]
             realized = sum(float(t["pnl"]) for t in trades if t["pnl"] is not None)
             total_realized += realized
 
-            open_pos = len(buys) > len(sells)
-            unrealized = 0.0
+            open_pos    = len(buys) > len(sells)
+            unrealized  = 0.0
             entry_price = None
-            qty = None
-            current = None
+            qty         = None
+            current     = prices.get(sym, {}).get("price")
 
-            if open_pos:
-                df = await fetch_ohlcv(sym, "15m", limit=1)
-                current = float(df["close"].iloc[-1])
+            if open_pos and current and buys:
                 entry_price = float(buys[-1]["price"])
-                qty = float(buys[-1]["quantity"])
-                unrealized = (current - entry_price) * qty
+                qty         = float(buys[-1]["quantity"])
+                unrealized  = (current - entry_price) * qty
                 total_unrealized += unrealized
 
-            # 최근 5개 거래
+            # 잔고 = 초기자본 + 실현손익 - 현재 투자금
+            invested = (qty * entry_price) if (open_pos and qty and entry_price) else 0.0
+            balance  = INITIAL_CAPITAL + realized - invested + (qty * current if (open_pos and qty and current) else 0.0)
+            total_balance += balance
+
             recent = []
             for t in reversed(trades[-5:]):
                 recent.append({
@@ -70,7 +92,7 @@ async def get_dashboard_data() -> dict:
                     "time":  t["executed_at"].strftime("%m/%d %H:%M"),
                 })
 
-            pnls = [float(t["pnl"]) for t in trades if t["pnl"] is not None]
+            pnls     = [float(t["pnl"]) for t in trades if t["pnl"] is not None]
             win_rate = round(100 * sum(1 for p in pnls if p > 0) / len(pnls), 1) if pnls else 0
 
             result.append({
@@ -83,21 +105,42 @@ async def get_dashboard_data() -> dict:
                 "open":        open_pos,
                 "entry_price": entry_price,
                 "current":     current,
+                "change":      prices.get(sym, {}).get("change", 0.0),
                 "qty":         qty,
+                "balance":     round(balance, 2),
                 "recent":      recent,
             })
 
         return {
-            "symbols":      result,
-            "total_pnl":    round(total_realized + total_unrealized, 2),
-            "total_real":   round(total_realized, 2),
-            "total_unreal": round(total_unrealized, 2),
+            "symbols":        result,
+            "total_pnl":      round(total_realized + total_unrealized, 2),
+            "total_real":     round(total_realized, 2),
+            "total_unreal":   round(total_unrealized, 2),
+            "total_balance":  round(total_balance, 2),
+            "initial_capital": round(INITIAL_CAPITAL * len(all_symbols), 2),
         }
 
 
 @app.on_event("startup")
 async def startup():
     await init_db()
+
+
+@app.get("/api/ohlcv/{symbol}")
+async def api_ohlcv(symbol: str, limit: int = 100):
+    """캔들 데이터 API — 차트용"""
+    df = await fetch_ohlcv(symbol.upper(), "15m", limit=limit)
+    candles = []
+    for _, row in df.iterrows():
+        ts = int(row["open_time"].timestamp())
+        candles.append({
+            "time":  ts,
+            "open":  float(row["open"]),
+            "high":  float(row["high"]),
+            "low":   float(row["low"]),
+            "close": float(row["close"]),
+        })
+    return JSONResponse(candles)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -116,73 +159,99 @@ async def api_status():
 
 
 def render_html(data: dict) -> str:
-    total_color = "profit" if data["total_pnl"] >= 0 else "loss"
+    total_color  = "profit" if data["total_pnl"] >= 0 else "loss"
+    return_pct   = ((data["total_balance"] - data["initial_capital"]) / data["initial_capital"] * 100) if data["initial_capital"] else 0
+    return_color = "profit" if return_pct >= 0 else "loss"
 
-    if not data["symbols"]:
-        body = """
-        <div class="card center">
-            <div class="label">거래 없음</div>
-            <div style="color:#888; margin-top:8px">HOLD 신호 또는 서킷브레이커 작동 중</div>
+    # 심볼 가격 헤더
+    price_tags = ""
+    for s in data["symbols"]:
+        chg_color = "#00c896" if s["change"] >= 0 else "#ff4d4d"
+        chg_sign  = "+" if s["change"] >= 0 else ""
+        price_tags += f"""
+        <div class="price-tag">
+            <span class="price-sym">{s['symbol'].replace('USDT','')}</span>
+            <span class="price-val">${s['current']:,.0f}</span>
+            <span style="color:{chg_color}; font-size:11px">{chg_sign}{s['change']:.2f}%</span>
         </div>
-        """
-    else:
-        cards = ""
-        for s in data["symbols"]:
-            pnl_color = "profit" if s["realized"] >= 0 else "loss"
-            unreal_color = "profit" if s["unrealized"] >= 0 else "loss"
-            pos_html = ""
-            if s["open"]:
-                pos_html = f"""
-                <div class="row">
-                    <span class="label">보유</span>
-                    <span>{s['qty']:.5f} @ ${s['entry_price']:,.2f}</span>
-                </div>
-                <div class="row">
-                    <span class="label">현재가</span>
-                    <span>${s['current']:,.2f}</span>
-                </div>
-                <div class="row">
-                    <span class="label">미실현</span>
-                    <span class="{unreal_color}">${s['unrealized']:+.2f}</span>
-                </div>
-                """
-            else:
-                pos_html = '<div class="row"><span class="label">포지션</span><span style="color:#888">없음</span></div>'
+        """ if s["current"] else ""
 
-            recent_rows = ""
-            for t in s["recent"]:
-                side_class = "buy" if t["side"] == "BUY" else "sell"
-                pnl_str = f'<span class="{"profit" if t["pnl"] and t["pnl"]>0 else "loss"}">${t["pnl"]:+.2f}</span>' if t["pnl"] is not None else ""
-                recent_rows += f"""
-                <tr>
-                    <td class="{side_class}">{t['side']}</td>
-                    <td>${t['price']:,.2f}</td>
-                    <td>{t['qty']:.5f}</td>
-                    <td>{pnl_str}</td>
-                    <td style="color:#888">{t['time']}</td>
-                </tr>
-                """
+    # 심볼 카드 + 차트
+    cards = ""
+    for s in data["symbols"]:
+        pnl_color   = "profit" if s["realized"] >= 0 else "loss"
+        unreal_color= "profit" if s["unrealized"] >= 0 else "loss"
+        bal_color   = "profit" if s["balance"] >= INITIAL_CAPITAL else "loss"
 
-            cards += f"""
-            <div class="card">
-                <div class="symbol">{s['symbol']}</div>
-                <div class="row">
-                    <span class="label">거래</span>
-                    <span>BUY {s['buys']}회 / SELL {s['sells']}회</span>
-                </div>
-                <div class="row">
-                    <span class="label">실현손익</span>
-                    <span class="{pnl_color}">${s['realized']:+.2f}</span>
-                </div>
-                {pos_html}
-                <div class="row">
-                    <span class="label">승률</span>
-                    <span>{s['win_rate']}%</span>
-                </div>
-                {"<table class='trade-table'><tr><th>방향</th><th>가격</th><th>수량</th><th>PnL</th><th>시간</th></tr>" + recent_rows + "</table>" if recent_rows else ""}
-            </div>
+        pos_html = ""
+        if s["open"] and s["qty"] and s["entry_price"]:
+            pos_html = f"""
+            <div class="row"><span class="label">보유</span>
+                <span>{s['qty']:.5f} @ ${s['entry_price']:,.2f}</span></div>
+            <div class="row"><span class="label">미실현</span>
+                <span class="{unreal_color}">${s['unrealized']:+.2f}</span></div>
             """
-        body = cards
+        else:
+            pos_html = '<div class="row"><span class="label">포지션</span><span style="color:#888">없음</span></div>'
+
+        recent_rows = ""
+        for t in s["recent"]:
+            side_cls = "buy" if t["side"] == "BUY" else "sell"
+            pnl_str  = f'<span class="{"profit" if t["pnl"] and t["pnl"]>0 else "loss"}">${t["pnl"]:+.2f}</span>' if t["pnl"] is not None else "-"
+            recent_rows += f"""<tr>
+                <td class="{side_cls}">{t['side']}</td>
+                <td>${t['price']:,.0f}</td>
+                <td>{t['qty']:.5f}</td>
+                <td>{pnl_str}</td>
+                <td style="color:#666">{t['time']}</td>
+            </tr>"""
+
+        table_html = f"""<table class="trade-table">
+            <tr><th>방향</th><th>가격</th><th>수량</th><th>PnL</th><th>시간</th></tr>
+            {recent_rows}
+        </table>""" if recent_rows else ""
+
+        cards += f"""
+        <div class="card">
+            <div class="card-header">
+                <span class="symbol">{s['symbol']}</span>
+                <span class="{bal_color}" style="font-size:13px">잔고 ${s['balance']:,.2f}</span>
+            </div>
+            <div id="chart-{s['symbol']}" style="height:180px; margin: 8px 0;"></div>
+            <div class="row"><span class="label">실현손익</span>
+                <span class="{pnl_color}">${s['realized']:+.2f}</span></div>
+            {pos_html}
+            <div class="row"><span class="label">거래</span>
+                <span>BUY {s['buys']} / SELL {s['sells']} · 승률 {s['win_rate']}%</span></div>
+            {table_html}
+        </div>
+        <script>
+        (async () => {{
+            const res = await fetch('/api/ohlcv/{s["symbol"]}?limit=100');
+            const data = await res.json();
+            const chart = LightweightCharts.createChart(document.getElementById('chart-{s["symbol"]}'), {{
+                layout: {{ background: {{ color: '#1a1a1a' }}, textColor: '#888' }},
+                grid: {{ vertLines: {{ color: '#2a2a2a' }}, horzLines: {{ color: '#2a2a2a' }} }},
+                timeScale: {{ timeVisible: true, borderColor: '#2a2a2a' }},
+                rightPriceScale: {{ borderColor: '#2a2a2a' }},
+                width: document.getElementById('chart-{s["symbol"]}').clientWidth,
+                height: 180,
+            }});
+            const series = chart.addCandlestickSeries({{
+                upColor: '#00c896', downColor: '#ff4d4d',
+                borderUpColor: '#00c896', borderDownColor: '#ff4d4d',
+                wickUpColor: '#00c896', wickDownColor: '#ff4d4d',
+            }});
+            series.setData(data);
+            chart.timeScale().fitContent();
+            window.addEventListener('resize', () => {{
+                chart.applyOptions({{ width: document.getElementById('chart-{s["symbol"]}').clientWidth }});
+            }});
+        }})();
+        </script>
+        """
+
+    status_msg = "거래 없음 — 신호 대기 중" if not any(s["buys"] > 0 for s in data["symbols"]) else "Paper Trading 진행 중"
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -191,47 +260,66 @@ def render_html(data: dict) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="60">
 <title>Alpha Agents</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ background: #0f0f0f; color: #e0e0e0; font-family: -apple-system, sans-serif; padding: 16px; }}
-  h1 {{ font-size: 18px; color: #fff; margin-bottom: 4px; }}
-  .subtitle {{ color: #666; font-size: 12px; margin-bottom: 16px; }}
-  .total {{ background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }}
-  .total-label {{ color: #888; font-size: 13px; }}
-  .total-value {{ font-size: 28px; font-weight: bold; }}
+  body {{ background: #0f0f0f; color: #e0e0e0; font-family: -apple-system, sans-serif; padding: 16px; max-width: 480px; margin: 0 auto; }}
+  h1 {{ font-size: 18px; color: #fff; }}
+  .subtitle {{ color: #555; font-size: 11px; margin-bottom: 12px; }}
+  .prices {{ display: flex; gap: 12px; margin-bottom: 12px; }}
+  .price-tag {{ background: #1a1a1a; border-radius: 10px; padding: 10px 14px; flex: 1; }}
+  .price-sym {{ color: #888; font-size: 11px; display: block; }}
+  .price-val {{ color: #fff; font-size: 16px; font-weight: bold; display: block; }}
+  .summary {{ background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 12px; }}
+  .summary-top {{ display: flex; justify-content: space-between; align-items: flex-start; }}
+  .big {{ font-size: 28px; font-weight: bold; }}
+  .meta {{ font-size: 12px; color: #666; margin-top: 4px; }}
   .profit {{ color: #00c896; }}
   .loss {{ color: #ff4d4d; }}
   .card {{ background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 12px; }}
-  .card.center {{ text-align: center; padding: 32px; }}
-  .symbol {{ font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 12px; }}
-  .row {{ display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2a2a2a; font-size: 14px; }}
-  .label {{ color: #888; }}
-  .trade-table {{ width: 100%; margin-top: 12px; font-size: 12px; border-collapse: collapse; }}
-  .trade-table th {{ color: #666; text-align: left; padding: 4px; }}
-  .trade-table td {{ padding: 4px; border-top: 1px solid #2a2a2a; }}
+  .card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+  .symbol {{ font-size: 15px; font-weight: bold; color: #fff; }}
+  .row {{ display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #222; font-size: 13px; }}
+  .label {{ color: #666; }}
+  .trade-table {{ width: 100%; margin-top: 10px; font-size: 11px; border-collapse: collapse; }}
+  .trade-table th {{ color: #555; text-align: left; padding: 3px; }}
+  .trade-table td {{ padding: 3px; border-top: 1px solid #222; }}
   .buy {{ color: #00c896; font-weight: bold; }}
   .sell {{ color: #ff4d4d; font-weight: bold; }}
+  .status {{ text-align: center; color: #444; font-size: 11px; margin-top: 16px; }}
 </style>
 </head>
 <body>
 <h1>Alpha Agents</h1>
-<div class="subtitle">Paper Trading · 60초마다 자동 갱신</div>
+<div class="subtitle">Paper Trading · 60초 자동갱신</div>
 
-<div class="total">
-  <div>
-    <div class="total-label">총 손익</div>
-    <div class="total-value {total_color}">${data['total_pnl']:+.2f}</div>
-  </div>
-  <div style="text-align:right">
-    <div style="color:#888; font-size:12px">실현 ${data['total_real']:+.2f}</div>
-    <div style="color:#888; font-size:12px">미실현 ${data['total_unreal']:+.2f}</div>
+<div class="prices">{price_tags}</div>
+
+<div class="summary">
+  <div class="summary-top">
+    <div>
+      <div style="color:#888; font-size:12px">총 잔고</div>
+      <div class="big">${data['total_balance']:,.2f}</div>
+      <div class="meta">초기 ${data['initial_capital']:,.0f} ·
+        <span class="{return_color}">{'+' if return_pct>=0 else ''}{return_pct:.2f}%</span>
+      </div>
+    </div>
+    <div style="text-align:right">
+      <div style="color:#888; font-size:11px">총 손익</div>
+      <div class="{total_color}" style="font-size:20px; font-weight:bold">${data['total_pnl']:+.2f}</div>
+      <div style="color:#555; font-size:11px">실현 ${data['total_real']:+.2f}</div>
+      <div style="color:#555; font-size:11px">미실현 ${data['total_unreal']:+.2f}</div>
+    </div>
   </div>
 </div>
 
-{body}
+{cards}
+
+<div class="status">{status_msg}</div>
 </body>
 </html>"""
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
