@@ -1,7 +1,7 @@
 """
-Paper Trader
-- Binance testnet에서 현재가를 조회하되 실제 주문은 내지 않음
-- 가상 포지션/잔고를 메모리에 유지하고 DB trades 테이블에 기록
+Paper Trader — 포트폴리오 기반 자본 관리
+- 심볼별 독립 $1000 대신 단일 풀(TOTAL_CAPITAL)에서 동적 배분
+- position_ratio × 현재 가용 현금 = 투자 금액
 - 수수료/슬리피지 시뮬레이션 포함
 """
 import logging
@@ -15,15 +15,13 @@ log = logging.getLogger("paper-trader")
 COMMISSION = 0.0004
 SLIPPAGE   = 0.0002
 
-# 심볼별 가상 포지션 상태 (메모리)
-_positions: dict[str, dict] = {}  # symbol → {qty, entry_price}
-_cash: dict[str, float] = {}      # symbol → usdt
+# ── 포트폴리오 상태 (메모리) ────────────────────────────────
+_portfolio_cash: float = settings.total_capital   # 가용 현금
+_positions: dict[str, dict] = {}                  # symbol → {qty, entry_price}
 
 
-def _get_cash(symbol: str) -> float:
-    if symbol not in _cash:
-        _cash[symbol] = 1000.0  # 심볼당 $1000 초기 자본
-    return _cash[symbol]
+def get_portfolio_cash() -> float:
+    return _portfolio_cash
 
 
 async def _current_price(symbol: str) -> float:
@@ -59,6 +57,8 @@ async def _record_trade(
 
 
 async def execute_paper(state: dict) -> dict:
+    global _portfolio_cash
+
     if not state.get("approved"):
         return {**state, "order_id": None, "executed_price": None,
                 "executed_qty": None, "error": None}
@@ -67,23 +67,31 @@ async def execute_paper(state: dict) -> dict:
     action     = state["action"]
     confidence = state["confidence"]
     signals    = state.get("signals", {})
-    pos_ratio  = state["position_ratio"]
+    pos_ratio  = state["position_ratio"]   # 총 자본 대비 비율 (e.g. 0.25)
 
     try:
         price = await _current_price(symbol)
         pos   = _positions.get(symbol)
 
         if action == "BUY" and pos is None:
-            cash       = _get_cash(symbol)
-            spend      = cash * pos_ratio
-            buy_price  = price * (1 + SLIPPAGE)
-            fee        = spend * COMMISSION
-            qty        = (spend - fee) / buy_price
-            _cash[symbol] = cash - spend
-            _positions[symbol] = {"qty": qty, "entry_price": buy_price}
+            # 가용 현금의 pos_ratio만큼 투자 (최소 $10 이상일 때만)
+            spend = _portfolio_cash * pos_ratio
+            if spend < 10.0:
+                return {**state, "order_id": None, "executed_price": None,
+                        "executed_qty": None, "error": "insufficient cash"}
+
+            buy_price = price * (1 + SLIPPAGE)
+            fee       = spend * COMMISSION
+            qty       = (spend - fee) / buy_price
+
+            _portfolio_cash -= spend
+            _positions[symbol] = {"qty": qty, "entry_price": buy_price, "invested": spend}
 
             await _record_trade(symbol, "BUY", buy_price, qty, fee, confidence, signals, None)
-            log.info(f"[PAPER][{symbol}] BUY  {qty:.5f} @ ${buy_price:,.2f}  (conf={confidence:.2f})")
+            log.info(
+                f"[PAPER][{symbol}] BUY  {qty:.5f} @ ${buy_price:,.2f}"
+                f"  spend=${spend:.2f}  cash_left=${_portfolio_cash:.2f}"
+            )
 
             return {**state, "order_id": f"paper-buy-{int(datetime.now().timestamp())}",
                     "executed_price": buy_price, "executed_qty": qty, "error": None}
@@ -92,13 +100,17 @@ async def execute_paper(state: dict) -> dict:
             sell_price = price * (1 - SLIPPAGE)
             proceeds   = pos["qty"] * sell_price
             fee        = proceeds * COMMISSION
-            pnl        = (proceeds - fee) - (pos["qty"] * pos["entry_price"])
-            _cash[symbol] = _get_cash(symbol) + proceeds - fee
+            pnl        = (proceeds - fee) - pos["invested"]
+
+            _portfolio_cash += proceeds - fee
             del _positions[symbol]
 
             await _record_trade(symbol, "SELL", sell_price, pos["qty"], fee, confidence, signals, pnl)
             pnl_sign = "+" if pnl >= 0 else ""
-            log.info(f"[PAPER][{symbol}] SELL {pos['qty']:.5f} @ ${sell_price:,.2f}  PnL={pnl_sign}{pnl:.2f}")
+            log.info(
+                f"[PAPER][{symbol}] SELL {pos['qty']:.5f} @ ${sell_price:,.2f}"
+                f"  PnL={pnl_sign}{pnl:.2f}  cash=${_portfolio_cash:.2f}"
+            )
 
             return {**state, "order_id": f"paper-sell-{int(datetime.now().timestamp())}",
                     "executed_price": sell_price, "executed_qty": pos["qty"], "error": None}
@@ -116,7 +128,13 @@ async def execute_paper(state: dict) -> dict:
 def get_paper_status() -> dict:
     """현재 paper trading 상태 반환"""
     return {
-        "cash":      {k: round(v, 2) for k, v in _cash.items()},
-        "positions": {k: {**v, "entry_price": round(v["entry_price"], 2)}
-                      for k, v in _positions.items()},
+        "portfolio_cash": round(_portfolio_cash, 2),
+        "positions": {
+            k: {
+                "qty":         round(v["qty"], 8),
+                "entry_price": round(v["entry_price"], 4),
+                "invested":    round(v["invested"], 2),
+            }
+            for k, v in _positions.items()
+        },
     }

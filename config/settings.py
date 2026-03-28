@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     trading_symbols: str = "BTCUSDT,ETHUSDT"
     trading_interval: str = "15m"
     prediction_horizon: int = 32       # 32봉 × 15m = 8시간
-    max_position_ratio: float = 0.25
+    total_capital: float = 5000.0      # 포트폴리오 총 자본 (USDT)
+    max_position_ratio: float = 0.25   # 단일 포지션 최대 비율 (총 자본 대비)
     mdd_circuit_breaker: float = 0.15
 
     # Phase 2+: newszips

@@ -16,7 +16,8 @@ from agents.analysis_agent.technical import fetch_ohlcv
 
 app = FastAPI()
 
-INITIAL_CAPITAL = 1000.0  # 심볼당 초기 자본
+from config import settings as _settings
+INITIAL_CAPITAL = _settings.total_capital  # 포트폴리오 총 자본
 
 
 async def get_fear_greed() -> dict:
@@ -70,14 +71,14 @@ async def get_dashboard_data() -> dict:
         all_symbols = settings.symbols
 
         result = []
-        total_realized = 0.0
+        total_realized  = 0.0
         total_unrealized = 0.0
-        total_balance = 0.0
+        total_invested  = 0.0   # 현재 열린 포지션에 묶인 금액
 
         for sym in all_symbols:
             trades = await conn.fetch(
                 """
-                SELECT side, price, quantity, pnl, executed_at
+                SELECT side, price, quantity, fee, pnl, executed_at
                 FROM trades WHERE symbol=$1 AND mode='paper'
                 ORDER BY executed_at ASC
                 """, sym
@@ -92,18 +93,19 @@ async def get_dashboard_data() -> dict:
             unrealized  = 0.0
             entry_price = None
             qty         = None
+            invested    = 0.0
             current     = prices.get(sym, {}).get("price")
 
             if open_pos and current and buys:
-                entry_price = float(buys[-1]["price"])
-                qty         = float(buys[-1]["quantity"])
+                last_buy    = buys[-1]
+                entry_price = float(last_buy["price"])
+                qty         = float(last_buy["quantity"])
+                # 실제 투자 금액 = qty * entry_price + fee
+                fee_buy     = float(last_buy["fee"]) if last_buy["fee"] else 0.0
+                invested    = qty * entry_price + fee_buy
                 unrealized  = (current - entry_price) * qty
                 total_unrealized += unrealized
-
-            # 잔고 = 초기자본 + 실현손익 - 현재 투자금
-            invested = (qty * entry_price) if (open_pos and qty and entry_price) else 0.0
-            balance  = INITIAL_CAPITAL + realized - invested + (qty * current if (open_pos and qty and current) else 0.0)
-            total_balance += balance
+                total_invested   += invested
 
             recent = []
             for t in reversed(trades[-5:]):
@@ -130,18 +132,28 @@ async def get_dashboard_data() -> dict:
                 "current":     current,
                 "change":      prices.get(sym, {}).get("change", 0.0),
                 "qty":         qty,
-                "balance":     round(balance, 2),
+                "invested":    round(invested, 2),
                 "recent":      recent,
             })
 
+        # 포트폴리오 총 잔고 = 초기자본 + 실현손익 - 투자중 금액 + 현재 포지션 가치
+        open_value   = sum(
+            s["qty"] * s["current"]
+            for s in result
+            if s["open"] and s["qty"] and s["current"]
+        )
+        portfolio_cash   = INITIAL_CAPITAL + total_realized - total_invested
+        total_balance    = portfolio_cash + open_value
+
         return {
-            "symbols":        result,
-            "total_pnl":      round(total_realized + total_unrealized, 2),
-            "total_real":     round(total_realized, 2),
-            "total_unreal":   round(total_unrealized, 2),
-            "total_balance":  round(total_balance, 2),
-            "initial_capital": round(INITIAL_CAPITAL * len(all_symbols), 2),
-            "fear_greed":     fg,
+            "symbols":         result,
+            "total_pnl":       round(total_realized + total_unrealized, 2),
+            "total_real":      round(total_realized, 2),
+            "total_unreal":    round(total_unrealized, 2),
+            "total_balance":   round(total_balance, 2),
+            "portfolio_cash":  round(portfolio_cash, 2),
+            "initial_capital": round(INITIAL_CAPITAL, 2),
+            "fear_greed":      fg,
         }
 
 
@@ -206,13 +218,14 @@ def render_html(data: dict) -> str:
     for s in data["symbols"]:
         pnl_color   = "profit" if s["realized"] >= 0 else "loss"
         unreal_color= "profit" if s["unrealized"] >= 0 else "loss"
-        bal_color   = "profit" if s["balance"] >= INITIAL_CAPITAL else "loss"
 
         pos_html = ""
         if s["open"] and s["qty"] and s["entry_price"]:
             pos_html = f"""
             <div class="row"><span class="label">보유</span>
                 <span>{s['qty']:.5f} @ ${s['entry_price']:,.2f}</span></div>
+            <div class="row"><span class="label">투자금액</span>
+                <span style="color:#aaa">${s['invested']:,.2f}</span></div>
             <div class="row"><span class="label">미실현</span>
                 <span class="{unreal_color}">${s['unrealized']:+.2f}</span></div>
             """
@@ -240,7 +253,7 @@ def render_html(data: dict) -> str:
         <div class="card">
             <div class="card-header">
                 <span class="symbol">{s['symbol']}</span>
-                <span class="{bal_color}" style="font-size:13px">잔고 ${s['balance']:,.2f}</span>
+                <span class="{pnl_color}" style="font-size:13px">손익 ${s['realized']:+.2f}</span>
             </div>
             <div id="chart-{s['symbol']}" style="height:180px; margin: 8px 0;"></div>
             <div class="row"><span class="label">실현손익</span>
@@ -345,6 +358,7 @@ def render_html(data: dict) -> str:
       <div style="color:#888; font-size:11px">총 손익</div>
       <div class="{total_color}" style="font-size:20px; font-weight:bold">${data['total_pnl']:+.2f}</div>
       <div style="color:#555; font-size:11px">실현 ${data['total_real']:+.2f}</div>
+      <div style="color:#555; font-size:11px">가용 현금 ${data['portfolio_cash']:,.2f}</div>
       <div style="color:#555; font-size:11px">미실현 ${data['total_unreal']:+.2f}</div>
     </div>
   </div>
