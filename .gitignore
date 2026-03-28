@@ -3,8 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
-models/
-*.pkl
+# models/ — 모델 파일은 포함
 .venv/
 venv/
 dist/

@@ -12,4 +12,4 @@ structlog==25.5.0
 uvicorn==0.42.0
 xgboost==3.0.0
 python-binance==1.0.19
-TA-Lib==0.4.32
+# TA-Lib은 Dockerfile에서 소스 빌드
