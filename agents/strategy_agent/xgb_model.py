@@ -2,7 +2,7 @@ import pickle
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from agents.strategy_agent.feature_builder import FEATURE_COLS
+from agents.strategy_agent.feature_builder import FEATURE_COLS, BTC_FEATURE_COLS
 
 MODEL_DIR = Path("models")
 LABEL_MAP = {0: "SELL", 1: "HOLD", 2: "BUY"}
@@ -23,7 +23,8 @@ def load_model(symbol: str):
 def predict(symbol: str, signals: dict) -> dict:
     model = load_model(symbol)
 
-    features = pd.DataFrame([{col: signals.get(col, 0.0) for col in FEATURE_COLS}])
+    feat_cols = BTC_FEATURE_COLS if symbol == "BTCUSDT" else FEATURE_COLS
+    features = pd.DataFrame([{col: signals.get(col, 0.0) for col in feat_cols}])
     proba = model.predict_proba(features)[0]
     pred_idx = int(np.argmax(proba))
 

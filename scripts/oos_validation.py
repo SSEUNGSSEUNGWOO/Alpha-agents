@@ -16,7 +16,7 @@ from sklearn.metrics import classification_report
 from sklearn.utils.class_weight import compute_sample_weight
 from pathlib import Path
 
-from agents.strategy_agent.feature_builder import build_training_data, add_multi_tf_features, FEATURE_COLS
+from agents.strategy_agent.feature_builder import build_training_data, add_multi_tf_features, add_btc_features, FEATURE_COLS, BTC_FEATURE_COLS
 from agents.analysis_agent.technical import compute_indicators
 from storage import init_db, get_pool
 
@@ -44,8 +44,10 @@ def strip_tz(df):
     return df
 
 
-def simple_backtest(df: pd.DataFrame, model, initial_capital=1000.0, confidence_threshold=0.45, max_position_ratio=0.25) -> dict:
+def simple_backtest(df: pd.DataFrame, model, feat_cols=None, initial_capital=1000.0, confidence_threshold=0.45, max_position_ratio=0.25) -> dict:
     from agents.strategy_agent.xgb_model import LABEL_MAP
+    if feat_cols is None:
+        feat_cols = FEATURE_COLS
     cash = initial_capital
     position = 0.0
     entry_price = 0.0
@@ -54,7 +56,7 @@ def simple_backtest(df: pd.DataFrame, model, initial_capital=1000.0, confidence_
 
     for _, row in df.iterrows():
         price = row["close"]
-        features = pd.DataFrame([{col: row[col] for col in FEATURE_COLS}])
+        features = pd.DataFrame([{col: row[col] for col in feat_cols}])
         proba = model.predict_proba(features)[0]
         pred_idx = int(np.argmax(proba))
         action = LABEL_MAP[pred_idx]
@@ -113,6 +115,12 @@ async def validate(symbol: str):
 
     df = add_multi_tf_features(df_15m, df_1h, df_4h)
 
+    feat_cols = BTC_FEATURE_COLS if symbol == "BTCUSDT" else FEATURE_COLS
+    if symbol != "BTCUSDT":
+        btc_15m = strip_tz(compute_indicators(await fetch_all("BTCUSDT", "15m")))
+        btc_1h  = strip_tz(compute_indicators(await fetch_all("BTCUSDT", "1h")))
+        df = add_btc_features(df, btc_15m, btc_1h)
+
     # 레이블 붙이기
     HORIZON = 32
     THRESHOLD = 0.01
@@ -120,7 +128,7 @@ async def validate(symbol: str):
     df["label"] = "HOLD"
     df.loc[df["future_return"] >  THRESHOLD, "label"] = "BUY"
     df.loc[df["future_return"] < -THRESHOLD, "label"] = "SELL"
-    df = df.dropna(subset=FEATURE_COLS + ["future_return"]).reset_index(drop=True)
+    df = df.dropna(subset=feat_cols + ["future_return"]).reset_index(drop=True)
 
     # 60일 / 30일 분리
     split_date = df["open_time"].max() - pd.Timedelta(days=30)
@@ -130,9 +138,9 @@ async def validate(symbol: str):
     print(f"학습: {train_df['open_time'].min().date()} ~ {train_df['open_time'].max().date()} ({len(train_df)}개)")
     print(f"테스트: {test_df['open_time'].min().date()} ~ {test_df['open_time'].max().date()} ({len(test_df)}개)")
 
-    X_train = train_df[FEATURE_COLS]
+    X_train = train_df[feat_cols]
     y_train = train_df["label"].map({"BUY": 2, "HOLD": 1, "SELL": 0})
-    X_test  = test_df[FEATURE_COLS]
+    X_test  = test_df[feat_cols]
     y_test  = test_df["label"].map({"BUY": 2, "HOLD": 1, "SELL": 0})
 
     # 학습
@@ -154,7 +162,7 @@ async def validate(symbol: str):
     print(classification_report(y_test, y_pred, target_names=["SELL","HOLD","BUY"]))
 
     # 백테스트 성능
-    result = simple_backtest(test_df, model)
+    result = simple_backtest(test_df, model, feat_cols=feat_cols, confidence_threshold=0.40)
     print(f"[백테스트 성능 — OOS 30일]")
     print(f"  수익률:  {result['return_pct']:+.2f}%")
     print(f"  MDD:     -{result['mdd']:.2f}%")
@@ -162,7 +170,7 @@ async def validate(symbol: str):
     print(f"  승률:    {result['win_rate']}%")
 
     # 피처 중요도 Top 10
-    importance = pd.Series(model.feature_importances_, index=FEATURE_COLS).sort_values(ascending=False)
+    importance = pd.Series(model.feature_importances_, index=feat_cols).sort_values(ascending=False)
     print(f"\n[피처 중요도 Top 10]")
     for feat, score in importance.head(10).items():
         bar = "█" * int(score * 200)
