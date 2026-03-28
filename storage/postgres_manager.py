@@ -79,4 +79,17 @@ async def init_tables() -> None:
 
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS pnl  NUMERIC;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS mode VARCHAR(10) NOT NULL DEFAULT 'paper';
+
+            CREATE TABLE IF NOT EXISTS models (
+                id          BIGSERIAL PRIMARY KEY,
+                symbol      VARCHAR(20) NOT NULL,
+                trained_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                window_days INT,
+                accuracy    NUMERIC,
+                f1_macro    NUMERIC,
+                model_data  BYTEA NOT NULL,
+                UNIQUE (symbol, trained_at)
+            );
+            CREATE INDEX IF NOT EXISTS idx_models_symbol_time
+                ON models (symbol, trained_at DESC);
         """)

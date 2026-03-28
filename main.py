@@ -14,6 +14,7 @@ from agents.data_agent.collectors.ohlcv import run_collector as run_ohlcv_collec
 from agents.data_agent.collectors.fear_greed import run_fear_greed_collector
 from agents.data_agent.collectors.trends import run_trends_collector
 from agents.data_agent.collectors.cryptopanic import run_cryptopanic_collector
+from agents.strategy_agent.weekly_retrain import run_weekly_retrain
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +77,7 @@ async def main():
     asyncio.create_task(run_fear_greed_collector())
     asyncio.create_task(run_trends_collector())
     asyncio.create_task(run_cryptopanic_collector())
+    asyncio.create_task(run_weekly_retrain())
 
     # 첫 사이클 즉시 실행 후 15분마다 반복
     while True:

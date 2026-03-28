@@ -107,16 +107,19 @@ def add_multi_tf_features(df_15m: pd.DataFrame,
     return df
 
 
-async def build_training_data(symbol: str) -> tuple[pd.DataFrame, pd.Series]:
+async def build_training_data(symbol: str, days: int = None) -> tuple[pd.DataFrame, pd.Series]:
     from storage import get_pool
     pool = await get_pool()
+
+    # 슬라이딩 윈도우: days 지정 시 최근 N일 데이터만 사용
+    time_filter = f"AND open_time >= NOW() - INTERVAL '{days} days'" if days else ""
 
     async def fetch(interval: str, limit: int = 10000, sym: str = None) -> pd.DataFrame:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT open_time, open, high, low, close, volume
-                FROM ohlcv WHERE symbol=$1 AND interval=$2
+                FROM ohlcv WHERE symbol=$1 AND interval=$2 {time_filter}
                 ORDER BY open_time ASC LIMIT $3
                 """,
                 sym or symbol, interval, limit,
