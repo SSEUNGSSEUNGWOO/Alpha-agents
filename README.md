@@ -34,15 +34,18 @@ analysis → strategy → risk → execute
 - **레이블**: +1% 초과 → BUY, -1% 미만 → SELL, 나머지 → HOLD
 - **리스크**: MDD 15% 서킷브레이커, 단일 포지션 최대 총 자본의 25%
 
-## 피처 (22개)
+## 피처
 
-| 그룹 | 피처 |
-|------|------|
-| 4h 지표 | RSI, MACD hist, BB position/width, EMA cross |
-| 1h 지표 | RSI, MACD hist, BB position, EMA cross |
-| 15m 지표 | BB width, ATR, Volatility, ADX, Volume ratio, Stoch K |
-| BTC 시장 | BTC 15m/1h 수익률, BTC/ETH 비율, 24h 상관관계 |
-| 시장 심리 | Fear & Greed Index, Google Trends 검색량/변화율 |
+BTC 전용 18개, 그 외 심볼 22개 (BTC 시장 피처 4개 추가).
+학습(`feature_builder.py`)과 실시간 예측(`technical.py`) 양쪽에서 동일한 값을 사용한다.
+
+| 그룹 | 피처 | 심볼 |
+|------|------|------|
+| 4h 지표 | RSI, MACD hist, BB position/width, EMA cross | 전체 |
+| 1h 지표 | RSI, MACD hist, BB position, EMA cross | 전체 |
+| 15m 지표 | BB width, ATR, Volatility, ADX, Volume ratio, Stoch K | 전체 |
+| BTC 시장 | BTC 15m/1h 수익률, BTC/ETH 비율, 24h 상관관계 | BTC 제외 |
+| 시장 심리 | Fear & Greed Index, Google Trends 검색량/변화율 | 전체 |
 
 ## 모델 학습 및 평가
 
