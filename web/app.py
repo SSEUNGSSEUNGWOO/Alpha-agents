@@ -24,7 +24,7 @@ async def get_dashboard_data() -> dict:
         )
 
         if not symbols:
-            return {"symbols": [], "total_pnl": 0.0}
+            return {"symbols": [], "total_pnl": 0.0, "total_real": 0.0, "total_unreal": 0.0}
 
         result = []
         total_realized = 0.0
