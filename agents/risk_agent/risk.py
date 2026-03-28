@@ -7,7 +7,7 @@ Risk Agent: 포지션 진입 전 리스크 체크
 from config import settings
 from storage import get_pool
 
-CONFIDENCE_THRESHOLD = 0.45   # 최소 신뢰도
+CONFIDENCE_THRESHOLD = 0.40   # 최소 신뢰도
 MDD_QUERY = """
     SELECT
         MIN(close) AS min_close,

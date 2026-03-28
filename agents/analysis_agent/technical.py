@@ -88,4 +88,6 @@ async def get_technical_signals(symbol: str) -> dict:
         "adx_4h":         last(df_4h, "adx_14"),
         "ema_trend_4h":   1.0 if last(df_4h, "ema_20") > last(df_4h, "ema_50") else -1.0,
         "bb_position_4h": last(df_4h, "bb_position"),
+        "bb_width_4h":    last(df_4h, "bb_width"),
+        "ema_cross_4h":   1.0 if last(df_4h, "ema_20") > last(df_4h, "ema_50") else 0.0,
     }

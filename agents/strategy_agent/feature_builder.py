@@ -6,13 +6,13 @@ from agents.analysis_agent.technical import compute_indicators
 
 
 FEATURE_COLS = [
-    "rsi_15m", "macd_15m", "macd_hist_15m", "bb_position_15m", "bb_width_15m",
-    "volume_ratio_15m", "atr_15m", "volatility_15m",
-    "rsi_1h", "macd_hist_1h", "bb_position_1h",
-    "rsi_4h", "macd_hist_4h", "bb_position_4h",
-    "ema_cross_15m",  # ema20 > ema50
-    "ema_cross_1h",
-    "stoch_k_15m", "adx_15m",
+    # 4h — 예측력 핵심
+    "rsi_4h", "macd_hist_4h", "bb_position_4h", "bb_width_4h", "ema_cross_4h",
+    # 1h
+    "rsi_1h", "macd_hist_1h", "bb_position_1h", "ema_cross_1h",
+    # 15m — 변동성/모멘텀 위주로 정리
+    "bb_width_15m", "atr_15m", "volatility_15m", "adx_15m",
+    "volume_ratio_15m", "stoch_k_15m",
 ]
 
 
@@ -46,8 +46,9 @@ def add_multi_tf_features(df_15m: pd.DataFrame,
     df["ema_cross_1h"] = (df["ema20_1h"] > df["ema50_1h"]).astype(float)
 
     # 4h 지표 → 15m에 merge_asof
-    df_4h_slim = df_4h[["open_time", "rsi_14", "macd_hist", "bb_position"]].copy()
-    df_4h_slim.columns = ["open_time", "rsi_4h", "macd_hist_4h", "bb_position_4h"]
+    df_4h["ema_cross_4h_raw"] = (df_4h["ema_20"] > df_4h["ema_50"]).astype(float)
+    df_4h_slim = df_4h[["open_time", "rsi_14", "macd_hist", "bb_position", "bb_width", "ema_cross_4h_raw"]].copy()
+    df_4h_slim.columns = ["open_time", "rsi_4h", "macd_hist_4h", "bb_position_4h", "bb_width_4h", "ema_cross_4h"]
     df = pd.merge_asof(
         df.sort_values("open_time"),
         df_4h_slim.sort_values("open_time"),
