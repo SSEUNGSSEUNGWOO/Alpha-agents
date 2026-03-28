@@ -43,8 +43,13 @@ class Settings(BaseSettings):
     def symbols(self) -> list[str]:
         return [s.strip() for s in self.trading_symbols.split(",")]
 
+    # Railway가 자동으로 주입하는 DB URL (있으면 우선 사용)
+    database_url: str = ""
+
     @property
     def postgres_dsn(self) -> str:
+        if self.database_url:
+            return self.database_url.replace("postgresql+asyncpg://", "postgresql://")
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -52,6 +57,8 @@ class Settings(BaseSettings):
 
     @property
     def async_postgres_dsn(self) -> str:
+        if self.database_url:
+            return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
