@@ -61,6 +61,8 @@ async def get_technical_signals(symbol: str) -> dict:
     df_4h  = compute_indicators(df_4h)
 
     def last(df: pd.DataFrame, col: str) -> float:
+        if df.empty or col not in df.columns or len(df) == 0:
+            return 0.0
         val = df[col].iloc[-1]
         return float(val) if not np.isnan(val) else 0.0
 
