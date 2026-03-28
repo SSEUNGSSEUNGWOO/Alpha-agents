@@ -11,16 +11,30 @@ from agents.strategy_agent.feature_builder import build_training_data
 MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(exist_ok=True)
 
+HALFLIFE_DAYS = 180  # 180일 전 데이터 = 현재의 50% 가중치
+
+
+def time_decay_weights(open_times, halflife_days: int = HALFLIFE_DAYS) -> np.ndarray:
+    """
+    최근 데이터일수록 높은 가중치 (지수 감쇠)
+    halflife_days 전 데이터 → 가중치 0.5
+    """
+    times   = open_times.reset_index(drop=True)
+    latest  = times.max()
+    days_old = (latest - times).dt.total_seconds() / 86400
+    weights  = np.exp(-days_old.values * np.log(2) / halflife_days)
+    return weights / weights.mean()  # 평균 1로 정규화
+
 
 async def train(symbol: str) -> None:
     print(f"\n{'='*50}")
     print(f"  XGBoost 학습 시작: {symbol}")
     print(f"{'='*50}")
 
-    X, y = await build_training_data(symbol)
+    X, y, open_times = await build_training_data(symbol)
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.15, shuffle=False  # 시계열이라 shuffle=False
+    X_train, X_val, y_train, y_val, t_train, _ = train_test_split(
+        X, y, open_times, test_size=0.15, shuffle=False
     )
 
     model = xgb.XGBClassifier(
@@ -36,11 +50,15 @@ async def train(symbol: str) -> None:
         n_jobs=-1,
     )
 
-    sample_weights = compute_sample_weight("balanced", y_train)
+    # 클래스 균형 × 시간 감쇠 결합
+    class_w = compute_sample_weight("balanced", y_train)
+    time_w  = time_decay_weights(t_train)
+    combined = class_w * time_w
+    combined /= combined.mean()
 
     model.fit(
         X_train, y_train,
-        sample_weight=sample_weights,
+        sample_weight=combined,
         eval_set=[(X_val, y_val)],
         verbose=50,
     )
@@ -49,7 +67,6 @@ async def train(symbol: str) -> None:
     print(f"\n[{symbol}] 검증 결과:")
     print(classification_report(y_val, y_pred, target_names=["SELL", "HOLD", "BUY"]))
 
-    # 모델 저장
     model_path = MODEL_DIR / f"xgb_{symbol.lower()}.pkl"
     with open(model_path, "wb") as f:
         pickle.dump(model, f)

@@ -16,10 +16,11 @@ import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, accuracy_score
 from sklearn.utils.class_weight import compute_sample_weight
+from agents.strategy_agent.trainer import time_decay_weights
 
 log = logging.getLogger("weekly-retrain")
 
-WINDOW_DAYS = 90   # 슬라이딩 윈도우 크기
+HALFLIFE_DAYS = 180  # 180일 전 데이터 = 현재의 50% 가중치
 
 
 async def _get_current_f1(symbol: str) -> float:
@@ -56,15 +57,15 @@ async def retrain_symbol(symbol: str) -> dict:
     from agents.strategy_agent.feature_builder import build_training_data
     from agents.strategy_agent.xgb_model import reload_model
 
-    log.info(f"[{symbol}] 재학습 시작 (최근 {WINDOW_DAYS}일)")
+    log.info(f"[{symbol}] 재학습 시작 (전체 데이터 + 시간 감쇠)")
 
-    X, y = await build_training_data(symbol, days=WINDOW_DAYS)
+    X, y, open_times = await build_training_data(symbol)  # 전체 데이터
     if len(X) < 500:
         log.warning(f"[{symbol}] 데이터 부족 ({len(X)}개) — 재학습 스킵")
         return {"symbol": symbol, "status": "skipped", "reason": "insufficient data"}
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.15, shuffle=False
+    X_train, X_val, y_train, y_val, t_train, _ = train_test_split(
+        X, y, open_times, test_size=0.15, shuffle=False
     )
 
     model = xgb.XGBClassifier(
@@ -78,8 +79,12 @@ async def retrain_symbol(symbol: str) -> dict:
         random_state=42,
         n_jobs=-1,
     )
-    sample_weights = compute_sample_weight("balanced", y_train)
-    model.fit(X_train, y_train, sample_weight=sample_weights,
+    class_w  = compute_sample_weight("balanced", y_train)
+    time_w   = time_decay_weights(t_train, HALFLIFE_DAYS)
+    combined = class_w * time_w
+    combined /= combined.mean()
+
+    model.fit(X_train, y_train, sample_weight=combined,
               eval_set=[(X_val, y_val)], verbose=False)
 
     y_pred   = model.predict(X_val)

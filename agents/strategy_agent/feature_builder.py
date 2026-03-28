@@ -204,8 +204,9 @@ async def build_training_data(symbol: str, days: int = None) -> tuple[pd.DataFra
     df = df.merge(labeled[["open_time", "label"]], on="open_time", how="inner")
     df = df.dropna(subset=feat_cols)
 
-    X = df[feat_cols]
-    y = df["label"].map({"BUY": 2, "HOLD": 1, "SELL": 0})
+    X          = df[feat_cols]
+    y          = df["label"].map({"BUY": 2, "HOLD": 1, "SELL": 0})
+    open_times = df["open_time"].reset_index(drop=True)
 
     print(f"[{symbol}] 학습 데이터: {len(X)}개, 피처: {len(feat_cols)}개")
-    return X, y
+    return X, y, open_times
